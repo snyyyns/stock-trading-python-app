@@ -11,6 +11,7 @@ POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
 LIMIT = 1000
 REQUEST_DELAY_SECONDS = 12
 RATE_LIMIT_WAIT_SECONDS = 60
+NETWORK_RETRY_WAIT_SECONDS = 15
 
 example_ticker = {
     'ticker': 'GLAS',
@@ -30,7 +31,13 @@ example_ticker = {
 
 def fetch_json(url):
     while True:
-        response = requests.get(url)
+        try:
+            response = requests.get(url, timeout=30)
+        except requests.RequestException as exc:
+            print(f'network error, waiting {NETWORK_RETRY_WAIT_SECONDS}s: {exc}')
+            time.sleep(NETWORK_RETRY_WAIT_SECONDS)
+            continue
+
         data = response.json()
         if response.status_code == 429 or data.get('status') == 'ERROR':
             error = data.get('error', response.text)
@@ -42,25 +49,30 @@ def fetch_json(url):
         return data
 
 
-url = f'https://api.massive.com/v3/reference/tickers?market=stocks&active=true&order=asc&limit={LIMIT}&sort=ticker&apiKey={POLYGON_API_KEY}'
-tickers = []
+def run_stock_job():
+    url = f'https://api.massive.com/v3/reference/tickers?market=stocks&active=true&order=asc&limit={LIMIT}&sort=ticker&apiKey={POLYGON_API_KEY}'
+    tickers = []
 
-data = fetch_json(url)
-tickers.extend(data['results'])
-
-while 'next_url' in data:
-    print('requesting next page', data['next_url'])
-    time.sleep(REQUEST_DELAY_SECONDS)
-    data = fetch_json(data['next_url'] + f'&apiKey={POLYGON_API_KEY}')
+    data = fetch_json(url)
     tickers.extend(data['results'])
 
-fieldnames = list(example_ticker.keys())
-output_path = 'tickers.csv'
+    while 'next_url' in data:
+        print('requesting next page')
+        time.sleep(REQUEST_DELAY_SECONDS)
+        data = fetch_json(data['next_url'] + f'&apiKey={POLYGON_API_KEY}')
+        tickers.extend(data['results'])
 
-with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
-    writer.writeheader()
-    for ticker in tickers:
-        writer.writerow({field: ticker.get(field, '') for field in fieldnames})
+    fieldnames = list(example_ticker.keys())
+    output_path = 'tickers.csv'
 
-print(f'wrote {len(tickers)} tickers to {output_path}')
+    with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        for ticker in tickers:
+            writer.writerow({field: ticker.get(field, '') for field in fieldnames})
+
+    print(f'wrote {len(tickers)} tickers to {output_path}')
+
+
+if __name__ == '__main__':
+    run_stock_job()
